@@ -114,7 +114,7 @@ jobs:
 
       - name: Run tests
         run: |
-          docker exec -u 1011:1011 store_manager pytest || true
+          docker compose exec -T store_manager python3 -m pytest -v
 
       - name: Show logs on failure
         if: failure()
