@@ -15,6 +15,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
 
   mysql:
     image: mysql:8.4.7
@@ -33,9 +35,9 @@ services:
       - ./db-init:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -proot"]
-      interval: 1m
-      timeout: 10s
-      retries: 5
+      interval: 5s
+      timeout: 5s
+      retries: 10
       start_period: 10s
 
   redis:
@@ -47,10 +49,10 @@ services:
       - labo08-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 1m
-      timeout: 10s
-      retries: 5
-      start_period: 10s
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   krakend:
     image: devopsfaith/krakend:2.7
@@ -91,7 +93,8 @@ services:
       test: kafka-broker-api-versions --bootstrap-server kafka:9092 || exit 1
       interval: 10s
       timeout: 10s
-      retries: 5
+      retries: 10
+      start_period: 15s
     networks:
       - labo08-network
 

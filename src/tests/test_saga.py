@@ -38,18 +38,33 @@ def test_saga(client):
     assert order_id > 0
     logger.debug(f"Created order with ID: {order_id}")
 
-    # Wait for 3s to give step 1 enough time to run
-    time.sleep(3)
-    
-    # 2. Check if order really exists and whether it has a payment link
-    response = client.get(f'/orders/{order_id}')
-    assert response.status_code == 201, f"Failed to get order: {response.get_json()}"
-    response = response.get_json()
-    logger.debug(response)
-    assert response["items"] is not None
-    assert int(response["user_id"]) > 0
-    assert float(response["total_amount"]) > 0
-    assert "http" in response["payment_link"]
-    logger.debug(f"Order data is correct")
-    
-    # NOTE: si nous le voulions, nous pourrions également écrire des tests pour vérifier si l'enregistrement Outbox a été créé
+    # Attente de 30s Pour attendre que la saga soit complétée.
+    # (OrderCreated -> StockDecreased -> OutboxProcessor -> PaymentCreated -> SagaCompleted)
+    max_wait = 30
+    poll_interval = 2
+    elapsed = 0
+    payment_link = ''
+
+    while elapsed < max_wait:
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
+        response = client.get(f'/orders/{order_id}')
+        assert response.status_code == 201, f"Failed to get order: {response.get_json()}"
+        order_data = response.get_json()
+        logger.debug(f"[{elapsed}s] order data: {order_data}")
+
+        payment_link = order_data.get("payment_link", "")
+        if "http" in payment_link:
+            logger.debug(f"Saga completed after {elapsed}s")
+            break
+
+    # 2. Final assertions
+    assert order_data["items"] is not None
+    assert int(order_data["user_id"]) > 0
+    assert float(order_data["total_amount"]) > 0
+    assert "http" in payment_link, (
+        f"payment_link never got set after {max_wait}s. Last value: '{payment_link}'. "
+        f"Check that Kafka, the api-gateway, and payments-api containers are all running."
+    )
+    logger.debug(f"payment_link={payment_link}")

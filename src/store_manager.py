@@ -11,6 +11,7 @@ from orders.handlers.order_created_handler import OrderCreatedHandler
 from orders.handlers.order_creation_failed_handler import OrderCreationFailedHandler
 from orders.handlers.order_cancelled_handler import OrderCancelledHandler
 from orders.handlers.saga_completed_handler import SagaCompletedHandler
+from payments.outbox_processor import OutboxProcessor
 from stocks.handlers.stock_decreased_handler import StockDecreasedHandler
 from stocks.handlers.stock_decrease_failed_handler import StockDecreaseFailedHandler
 from stocks.handlers.stock_increased_handler import StockIncreasedHandler
@@ -23,10 +24,13 @@ from orders.controllers.order_controller import create_order, remove_order, get_
 from orders.controllers.user_controller import create_user, remove_user, get_user
 from stocks.controllers.product_controller import create_product, remove_product, get_product
 from stocks.controllers.stock_controller import get_stock, populate_redis_on_startup, set_stock, get_stock_overview
+from logger import Logger
+
+logger = Logger.get_instance("store_manager")
 
 app = Flask(__name__)
 
-# Auto-populate Redis 5s after API startup (to give enough time for the DB to start up as well)
+# Auto-populate Redis 10s after API startup
 thread = threading.Timer(10.0, populate_redis_on_startup)
 thread.daemon = True
 thread.start()
@@ -50,6 +54,18 @@ consumer_service = OrderEventConsumer(
     registry=registry
 )
 consumer_service.start()
+
+# Run outbox processor at startup in a background thread so a DB hiccup
+# at boot time doesn't crash the whole app
+def _run_outbox_processor_safe():
+    try:
+        OutboxProcessor().run()
+    except Exception as e:
+        logger.warning(f"OutboxProcessor startup run failed (will retry on next event): {e}")
+
+outbox_thread = threading.Timer(5.0, _run_outbox_processor_safe)
+outbox_thread.daemon = True
+outbox_thread.start()
 
 @app.get('/health-check')
 def health():

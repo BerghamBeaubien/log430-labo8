@@ -12,7 +12,7 @@
       "backend": [
         {
           "url_pattern": "/payments",
-          "host": ["http://payments_api:5009"],
+          "host": ["http://payments-api:5009"],
           "timeout": "5s"
         }
       ]
@@ -23,7 +23,7 @@
       "backend": [
         {
           "url_pattern": "/payments/process/{payment_id}",
-          "host": ["http://payments_api:5009"],
+          "host": ["http://payments-api:5009"],
           "timeout": "5s"
         }
       ]

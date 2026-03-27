@@ -49,8 +49,6 @@ def add_order(user_id: int, items: list):
                 'unit_price': unit_price
             })
 
-        # NOTE: Au départ, il n'y a pas de lien de paiement. 
-        # Il sera généré par StockDecreasedHandler et ensuite il sera intégré à la commande par PaymentCreatedHandler.
         new_order = Order(user_id=user_id, total_amount=total_amount, payment_link="no-link")
         session.add(new_order)
         session.flush()   
@@ -72,7 +70,6 @@ def add_order(user_id: int, items: list):
 
         add_order_to_redis(order_id, user_id, total_amount, items)
 
-        # Déclencher l'événement OrderCreated
         event_data = {'event': 'OrderCreated', 
                         'order_id': new_order.id, 
                         'user_id': new_order.user_id,
@@ -84,7 +81,6 @@ def add_order(user_id: int, items: list):
         return order_id
 
     except Exception as e:
-        # Déclencher l'événement OrderCreationFailed
         event_data['error'] = str(e)
         session.rollback()
         raise e
@@ -93,6 +89,7 @@ def add_order(user_id: int, items: list):
         session.close()
 
 def modify_order(order_id: int, is_paid: bool, payment_id: int):
+    """Update order in MySQL and Redis"""
     session = get_sqlalchemy_session()
     try:
         order = session.query(Order).filter(Order.id == order_id).first()
@@ -100,19 +97,33 @@ def modify_order(order_id: int, is_paid: bool, payment_id: int):
         if order is not None and is_paid is not None:
             order.is_paid = is_paid
 
+        payment_link = None
         if order is not None and payment_id is not None:
-            order.payment_link = f"http://api-gateway:8080/payments-api/payments/process/{payment_id}"
+            payment_link = f"http://api-gateway:8080/payments-api/payments/process/{payment_id}"
+            order.payment_link = payment_link
 
         session.commit()
         session.refresh(order)
+
+        # Keep Redis in sync
+        r = get_redis_conn()
+        redis_order = r.hgetall(f"order:{order_id}")
+        if redis_order:
+            if is_paid is not None:
+                redis_order['is_paid'] = str(is_paid)
+            if payment_link is not None:
+                redis_order['payment_link'] = payment_link
+            r.hset(f"order:{order_id}", mapping=redis_order)
+            logger.debug(f"Redis updated for order:{order_id} payment_link={payment_link}")
+
         return True
     except SQLAlchemyError as e:
         session.rollback()
-        print(e)
+        logger.debug(f"SQLAlchemyError in modify_order: {e}")
         return False
     except Exception as e:
         session.rollback()
-        print(e)
+        logger.debug(f"Exception in modify_order: {e}")
         return False
     finally:
         session.close()
@@ -123,12 +134,10 @@ def delete_order(order_id: int):
     try:
         order = session.query(Order).filter(Order.id == order_id).first()
         if order:
-            # MySQL
             session.query(OrderItem).filter(OrderItem.order_id == order_id).all()
             session.delete(order)
             session.commit()
 
-            # Redis
             delete_order_from_redis(order_id)
             return 1  
         else:

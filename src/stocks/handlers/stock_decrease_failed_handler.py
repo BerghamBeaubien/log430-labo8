@@ -7,7 +7,7 @@ from typing import Dict, Any
 import config
 from event_management.base_handler import EventHandler
 from orders.commands.order_event_producer import OrderEventProducer
-
+from orders.commands.write_order import delete_order
 
 class StockDecreaseFailedHandler(EventHandler):
     """Handles StockDecreaseFailed events"""
@@ -25,6 +25,8 @@ class StockDecreaseFailedHandler(EventHandler):
         # TODO: Consultez le diagramme de machine à états pour savoir quelle opération effectuer dans cette méthode. 
 
         try:
+            delete_order(event_data['order_id'])
+            
             # Si l'operation a réussi, déclenchez OrderCancelled.
             event_data['event'] = "OrderCancelled"
             OrderEventProducer().get_instance().send(config.KAFKA_TOPIC, value=event_data)

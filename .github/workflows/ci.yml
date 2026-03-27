@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: self-hosted
+
+    steps:
+      - name: Clean workspace
+        run: |
+          sudo chown -R $(whoami):$(whoami) $GITHUB_WORKSPACE || true
+          sudo chmod -R u+rwx $GITHUB_WORKSPACE || true
+          sudo rm -rf $GITHUB_WORKSPACE/* $GITHUB_WORKSPACE/.* 2>/dev/null || true
+
+      - name: Checkout depot
+        run: |
+          if [ -d .git ]; then
+            git fetch https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+            git reset --hard origin/${{ github.ref_name }}
+          else
+            git clone --branch ${{ github.ref_name }} https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git .
+          fi
+
+      - name: Creer fichier .env
+        run: |
+          cat > .env <<EOF
+          DB_HOST=mysql
+          DB_PORT=3306
+          DB_USER=labo08
+          DB_PASSWORD=labo08
+          DB_NAME=labo08_db
+          REDIS_HOST=redis
+          REDIS_PORT=6379
+          REDIS_DB=0
+          KAFKA_HOST=kafka:9092
+          KAFKA_TOPIC=order-saga-events
+          KAFKA_GROUP_ID=order-saga-group
+          KAFKA_AUTO_OFFSET_RESET=earliest
+          LOG_LEVEL=INFO
+          EOF
+
+      - name: Creer le network Docker si absent
+        run: |
+          docker network inspect labo08-network >/dev/null 2>&1 || docker network create labo08-network
+
+      - name: Build et démarrer tous les conteneurs
+        run: |
+          docker compose down -v --remove-orphans || true
+          docker compose build --no-cache
+          docker compose up -d
+
+      - name: Attendre MySQL
+        run: |
+          echo "Waiting for MySQL..."
+          timeout=60
+          until docker compose exec -T mysql mysqladmin ping -h localhost -u root -proot --silent 2>/dev/null; do
+            sleep 3
+            timeout=$((timeout - 3))
+            if [ $timeout -le 0 ]; then
+              echo "MySQL failed to start"
+              docker compose logs mysql
+              exit 1
+            fi
+          done
+          echo "✅ MySQL is up"
+
+      - name: Attendre Kafka
+        run: |
+          echo "Waiting for Kafka..."
+          timeout=60
+          until docker compose exec -T kafka kafka-broker-api-versions --bootstrap-server kafka:9092 >/dev/null 2>&1; do
+            sleep 3
+            timeout=$((timeout - 3))
+            if [ $timeout -le 0 ]; then
+              echo "Kafka failed to start"
+              docker compose logs kafka
+              exit 1
+            fi
+          done
+          echo "✅ Kafka is up"
+
+      - name: Attendre store_manager
+        run: |
+          echo "Waiting for store_manager..."
+          timeout=60
+          until [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5000/health-check)" = "200" ]; do
+            sleep 3
+            timeout=$((timeout - 3))
+            if [ $timeout -le 0 ]; then
+              echo "store_manager failed to start"
+              docker compose logs store_manager
+              exit 1
+            fi
+          done
+          echo "✅ store_manager is up"
+
+      - name: Attendre api-gateway (KrakenD)
+        run: |
+          echo "Waiting for api-gateway..."
+          timeout=30
+          until [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/__health)" = "200" ]; do
+            sleep 3
+            timeout=$((timeout - 3))
+            if [ $timeout -le 0 ]; then
+              echo "⚠️  api-gateway not responding — payments may fail"
+              break
+            fi
+          done
+          echo "✅ api-gateway check done"
+
+      - name: Run tests
+        run: |
+          docker compose exec -T store_manager python3 -m pytest src/tests/ -v
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== store_manager logs ==="
+          docker compose logs store_manager
+          echo "=== kafka logs ==="
+          docker compose logs kafka
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v --remove-orphans
